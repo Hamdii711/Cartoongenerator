@@ -4,15 +4,27 @@ Générateur de dessins animés 2D "cutout" (façon South Park), scène par
 scène, en faisant collaborer plusieurs IA :
 
 - un **LLM** (OpenAI ou Gemini) écrit le scénario et le découpe en scènes ;
-- un **provider image** (OpenAI ou Gemini) génère les personnages (une fois,
-  réutilisés comme cutouts sur toutes les scènes) et les décors ;
+- un **provider image** (OpenAI ou Gemini) génère les personnages (une fois
+  par projet, réutilisés comme cutouts sur toutes les scènes) et les
+  décors ;
 - du **code Python** (Pillow + MoviePy) compose chaque scène : personnage
   posé sur le décor, bouche qui alterne pendant qu'il "parle", petit
   mouvement de caméra, dialogue affiché en sous-titre (pas de voix) ;
 - toutes les scènes sont assemblées en une **vidéo finale** (`final.mp4`).
 
-Projet **indépendant** de hermes-agent : aucun tool/plugin/skill, aucune
-dépendance au reste du dépôt.
+Projet **indépendant** : aucun tool/plugin/skill, aucune dépendance à un
+autre dépôt.
+
+## Documentation
+
+| Doc | Contenu |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Comment le pipeline est découpé et pourquoi, détail du rendu d'une scène, roadmap |
+| [docs/CLI.md](docs/CLI.md) | Référence complète de chaque commande, flags, sortie JSON |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env`, `config.yaml`, schémas `story.json` et `profile.json` |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Comment ajouter un nouveau backend LLM/image |
+| [docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md) | Comment un agent IA pilote cet outil (contrat d'appel, exemple) |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Erreurs courantes et leur solution |
 
 ## Installation
 
@@ -41,11 +53,14 @@ projects/<nom_projet>/
 └── final.mp4
 ```
 
-## Utilisation (CLI, sortie JSON)
+Détail des schémas JSON : [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+## Utilisation rapide
 
 Toutes les commandes impriment un JSON sur stdout en cas de succès, ou un
 JSON d'erreur sur stderr + code de sortie non nul en cas d'échec — pensé
-pour être appelé par un agent IA plutôt que par un humain.
+pour être appelé par un agent IA plutôt que par un humain (détails :
+[docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md)).
 
 ```bash
 # 1. Créer les personnages du projet (une fois, réutilisés sur toutes les scènes)
@@ -78,27 +93,38 @@ python main.py generate --project ep1 \
   --scenes 4 --llm-provider gemini --image-provider openai
 ```
 
-Le résultat final est dans `projects/ep1/final.mp4`.
+Le résultat final est dans `projects/ep1/final.mp4`. Référence complète des
+commandes : [docs/CLI.md](docs/CLI.md).
 
 ## Ajouter un provider
 
 Le système est extensible par design : implémenter `LLMProvider` et/ou
 `ImageProvider` (voir `providers/base.py`) dans un nouveau fichier sous
 `providers/`, puis l'ajouter dans les registres `LLM_PROVIDERS` /
-`IMAGE_PROVIDERS` de `providers/__init__.py`. Rien d'autre à changer.
+`IMAGE_PROVIDERS` de `providers/__init__.py`. Rien d'autre à changer. Guide
+détaillé : [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
-## Configuration
+## Tests
 
-- `.env` : clés API uniquement (secrets).
-- `config.yaml` (optionnel, à la racine de `cartoon_generator/`) : provider
-  par défaut, résolution, fps, timing des lignes de dialogue, etc. Voir
-  `config.py::DEFAULT_CONFIG` pour la liste des clés.
+```bash
+source venv/bin/activate
+python -m pytest tests/ -q
+```
+
+`tests/test_pipeline_smoke.py` fait tourner le pipeline complet
+(personnage → script → rendu → assemblage) avec des providers factices,
+sans aucun appel réseau.
 
 ## Limites actuelles
 
 - Pas de voix/TTS : les dialogues sont affichés en sous-titres, la durée de
-  chaque scène est estimée à partir de la longueur du texte.
+  chaque scène est estimée à partir de la longueur du texte. Piste
+  d'extension documentée dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#roadmap-pistes-dextension-non-implémentées).
 - La transparence des personnages générés par un provider qui ne supporte
   pas nativement l'alpha (ex: Gemini/Imagen) est obtenue en détourant un
-  fond blanc uni (`pipeline/character_studio.py::_key_white_to_alpha`) —
-  fonctionne bien tant que le personnage n'a pas de grandes zones blanches.
+  fond blanc uni — voir [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+  pour les cas limites.
+
+## Licence
+
+Pas de licence définie pour l'instant (dépôt privé de développement).
