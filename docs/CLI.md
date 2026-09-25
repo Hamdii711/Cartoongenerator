@@ -43,6 +43,39 @@ Sortie :
 
 ---
 
+## `character import`
+
+Crée un personnage à partir d'images **que tu as déjà** (faites à la main
+dans ChatGPT, Gemini, etc.) : aucun appel API, aucune clé nécessaire.
+Prompts conseillés pour générer ces images : [IMAGES_MANUELLES.md](IMAGES_MANUELLES.md).
+
+```bash
+python main.py character import \
+  --project ep1 \
+  --name Yanis \
+  --neutral images/yanis_neutre.png \
+  --talk images/yanis_bouche_ouverte.png \
+  --blink images/yanis_yeux_fermes.png \
+  --description "jeune homme, t-shirt blanc, short noir" \
+  --personality "sûr de lui, persuadé d'être un grand chef" \
+  --role "personnage principal"
+```
+
+| Flag | Requis | Description |
+|---|---|---|
+| `--project` | oui | Nom du projet |
+| `--name` | oui | Nom du personnage |
+| `--neutral` | oui | Image : pose neutre, bouche fermée |
+| `--talk` | non | Image : bouche ouverte (défaut : reprend `--neutral`, donc pas d'animation de bouche) |
+| `--blink` | non | Image : yeux fermés (défaut : reprend `--neutral`, donc pas de clignement) |
+| `--description`, `--personality`, `--role` | non | Fiche du personnage, utilisée par le LLM pour écrire les dialogues |
+
+Les images sur fond blanc uni sont détourées automatiquement. Seul le blanc
+**relié au bord de l'image** est retiré : un t-shirt blanc ou le blanc des
+yeux, entourés d'un contour noir, sont conservés.
+
+---
+
 ## `script generate`
 
 Génère `story.json` : le titre, le synopsis et le découpage en scènes avec
@@ -78,7 +111,10 @@ n'est écrit sur disque.
 ## `render`
 
 Génère les décors manquants (idempotent - un décor déjà présent n'est pas
-regénéré) puis rend chaque scène de `story.json` en clip vidéo.
+regénéré) puis rend chaque scène de `story.json` en clip vidéo. Si tous les
+décors existent déjà (par exemple faits à la main et déposés dans
+`backgrounds/scene_<id>.png`), aucun provider image n'est appelé et aucune
+clé API n'est nécessaire.
 
 ```bash
 python main.py render --project ep1 --image-provider openai

@@ -106,3 +106,66 @@ def test_full_pipeline_produces_final_video(project):
     final_path = video_assembler.assemble(project, cfg)
     assert final_path.exists()
     assert final_path.stat().st_size > 0
+
+
+def _figure_with_white_shirt() -> Image.Image:
+    """White background + a black-outlined figure whose body is white too
+    (like a white t-shirt), with a colored head."""
+    from PIL import ImageDraw
+
+    img = Image.new("RGB", (200, 300), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((60, 120, 140, 260), fill=(250, 250, 250), outline=(0, 0, 0), width=4)
+    draw.ellipse((70, 30, 130, 110), fill=(210, 150, 90), outline=(0, 0, 0), width=4)
+    return img
+
+
+def test_keying_removes_background_but_keeps_enclosed_white():
+    img = character_studio._key_white_to_alpha(_figure_with_white_shirt())
+    assert img.getpixel((5, 5))[3] == 0          # background -> transparent
+    assert img.getpixel((100, 190))[3] == 255    # white shirt inside outline -> kept
+    assert img.getpixel((100, 70))[3] == 255     # head -> kept
+
+
+def test_import_character_and_render_without_image_provider(project, tmp_path):
+    """A character imported from files + a hand-made background must render
+    without any image provider (no API key needed)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _figure_with_white_shirt().save(src / "neutral.png")
+    _figure_with_white_shirt().save(src / "talk.png")
+
+    result = character_studio.import_character(
+        project=project,
+        name="Yanis",
+        physical_description="white t-shirt",
+        personality="confident",
+        role="lead",
+        pose_images={"neutral": str(src / "neutral.png"), "talk": str(src / "talk.png")},
+    )
+    assert set(result["paths"]) == {"neutral", "talk"}
+
+    assets = character_studio.load_character_assets(project, "Yanis")
+    # blink falls back to neutral, and all poses share the same cropped size
+    assert assets["blink"].size == assets["neutral"].size == assets["talk"].size
+    assert assets["neutral"].size[1] < 300  # empty margins were cropped away
+
+    story = script_writer.generate_story(project, "t", 1, FakeLLMProvider())
+    bg_dir = cg.get_project_dir(project) / "backgrounds"
+    Image.new("RGB", (320, 180), (90, 130, 120)).save(bg_dir / "scene_1.png")
+    assert scene_renderer.missing_backgrounds(project, story) == []
+
+    cfg = cg.load_config()
+    cfg["resolution"] = [320, 180]
+    cfg["fps"] = 10
+    paths = scene_renderer.render_project(project, story, cfg)
+    assert paths[0].exists() and paths[0].stat().st_size > 0
+
+
+def test_caption_wraps_long_text_inside_frame():
+    from PIL import ImageFont
+
+    font = scene_renderer._load_font(28)
+    lines = scene_renderer._wrap_to_width("mot " * 60, font, 600)
+    assert len(lines) > 1
+    assert all(font.getlength(line) <= 600 for line in lines)

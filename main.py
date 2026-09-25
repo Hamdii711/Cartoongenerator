@@ -42,6 +42,22 @@ def cmd_character_add(args: argparse.Namespace) -> Dict[str, Any]:
     return result
 
 
+def cmd_character_import(args: argparse.Namespace) -> Dict[str, Any]:
+    pose_images = {"neutral": args.neutral}
+    if args.talk:
+        pose_images["talk"] = args.talk
+    if args.blink:
+        pose_images["blink"] = args.blink
+    return character_studio.import_character(
+        project=args.project,
+        name=args.name,
+        physical_description=args.description or "",
+        personality=args.personality or "",
+        role=args.role or "",
+        pose_images=pose_images,
+    )
+
+
 def cmd_script_generate(args: argparse.Namespace) -> Dict[str, Any]:
     cfg = load_config()
     provider_name = args.provider or cfg["default_llm_provider"]
@@ -59,10 +75,13 @@ def cmd_script_generate(args: argparse.Namespace) -> Dict[str, Any]:
 
 def cmd_render(args: argparse.Namespace) -> Dict[str, Any]:
     cfg = load_config()
-    provider_name = args.image_provider or cfg["default_image_provider"]
-    image_provider = get_image_provider(provider_name)
     story = script_writer.load_story(args.project)
-    scene_renderer.ensure_backgrounds(args.project, story, image_provider)
+    # Only build (and require credentials for) an image provider when some
+    # background actually still has to be generated.
+    if scene_renderer.missing_backgrounds(args.project, story):
+        provider_name = args.image_provider or cfg["default_image_provider"]
+        image_provider = get_image_provider(provider_name)
+        scene_renderer.ensure_backgrounds(args.project, story, image_provider)
     paths = scene_renderer.render_project(args.project, story, cfg)
     return {"project": args.project, "scenes": [str(p) for p in paths]}
 
@@ -116,6 +135,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_char_add.add_argument("--role", default="", help="Role in the story")
     p_char_add.add_argument("--provider", default=None, help="Image provider (default from config.yaml)")
     p_char_add.set_defaults(func=cmd_character_add)
+
+    p_char_import = char_sub.add_parser("import", help="Create a character from existing image files (no API call)")
+    p_char_import.add_argument("--project", required=True)
+    p_char_import.add_argument("--name", required=True)
+    p_char_import.add_argument("--neutral", required=True, help="Image: idle pose, mouth closed")
+    p_char_import.add_argument("--talk", default=None, help="Image: mouth open (default: reuse neutral)")
+    p_char_import.add_argument("--blink", default=None, help="Image: eyes closed (default: reuse neutral)")
+    p_char_import.add_argument("--description", default="", help="Physical description")
+    p_char_import.add_argument("--personality", default="", help="Personality / traits")
+    p_char_import.add_argument("--role", default="", help="Role in the story")
+    p_char_import.set_defaults(func=cmd_character_import)
 
     p_script = sub.add_parser("script", help="Manage a project's story script")
     script_sub = p_script.add_subparsers(dest="subcommand", required=True)

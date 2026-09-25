@@ -20,6 +20,7 @@ autre dépôt.
 | Doc | Contenu |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Comment le pipeline est découpé et pourquoi, détail du rendu d'une scène, roadmap |
+| [docs/IMAGES_MANUELLES.md](docs/IMAGES_MANUELLES.md) | Prompts pour créer toi-même personnages et décors dans ChatGPT/Gemini |
 | [docs/CLI.md](docs/CLI.md) | Référence complète de chaque commande, flags, sortie JSON |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env`, `config.yaml`, schémas `story.json` et `profile.json` |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | Comment ajouter un nouveau backend LLM/image |
@@ -75,6 +76,11 @@ python main.py character add --project ep1 --name Stan \
   --personality "raisonnable, un peu blasé" \
   --role "fils de Randy" \
   --provider openai
+
+# (Variante sans clé API : importer des images faites à la main dans ChatGPT/Gemini)
+python main.py character import --project ep1 --name Yanis \
+  --neutral yanis_neutre.png --talk yanis_parle.png --blink yanis_cligne.png \
+  --personality "sûr de lui" --role "personnage principal"
 
 # 2. Générer le script (découpage en scènes + dialogues)
 python main.py script generate --project ep1 \

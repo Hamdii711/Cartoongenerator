@@ -9,7 +9,6 @@ style camera move, and the dialogue is burned in as a caption bar.
 from __future__ import annotations
 
 import math
-import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -29,6 +28,12 @@ Size = Tuple[int, int]
 # Backgrounds
 # ---------------------------------------------------------------------------
 
+def missing_backgrounds(project: str, story: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Scenes whose background image doesn't exist on disk yet."""
+    bg_dir = get_project_dir(project) / "backgrounds"
+    return [s for s in story["scenes"] if not (bg_dir / f"scene_{s['id']}.png").exists()]
+
+
 def ensure_backgrounds(project: str, story: Dict[str, Any], image_provider: ImageProvider) -> None:
     """Generate any missing background image for the story's scenes.
 
@@ -38,10 +43,8 @@ def ensure_backgrounds(project: str, story: Dict[str, Any], image_provider: Imag
     """
     bg_dir = get_project_dir(project) / "backgrounds"
     bg_dir.mkdir(parents=True, exist_ok=True)
-    for scene in story["scenes"]:
+    for scene in missing_backgrounds(project, story):
         out_path = bg_dir / f"scene_{scene['id']}.png"
-        if out_path.exists():
-            continue
         prompt = build_background_prompt(scene["background_desc"])
         raw = image_provider.generate_image(prompt, transparent_bg=False, size="1536x1024")
         img = Image.open(_bytes_io(raw)).convert("RGB")
@@ -154,7 +157,7 @@ def _character_position(
     cw, ch = char_size
     slot_w = w / count
     base_x = int(slot_w * idx + (slot_w - cw) / 2)
-    base_y = h - ch  # feet at the bottom edge
+    base_y = h - ch - _caption_bar_height(frame_size)  # feet just above the caption bar
 
     entrance = min(1.0, t / 0.5)
     ease = 1 - (1 - entrance) ** 2
@@ -180,17 +183,49 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def _caption_bar_height(size: Size) -> int:
+    return max(60, int(size[1] * 0.16))
+
+
+def _wrap_to_width(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
+    """Greedy word wrap using the font's real rendered width."""
+    lines: List[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if current and font.getlength(candidate) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
 def _caption_overlay(speaker: str, text: str, size: Size) -> Image.Image:
     w, h = size
-    bar_h = max(60, int(h * 0.16))
+    bar_h = _caption_bar_height(size)
+    margin = 20
+    label = f"{speaker}: {text}"
+
+    # Shrink the font until the wrapped caption fits inside the bar.
+    font_size = max(16, bar_h // 4)
+    while True:
+        font = _load_font(font_size)
+        lines = _wrap_to_width(label, font, w - 2 * margin)
+        line_h = font_size + 6
+        if len(lines) * line_h <= bar_h - 10 or font_size <= 12:
+            break
+        font_size -= 2
+
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     bar = Image.new("RGBA", (w, bar_h), (0, 0, 0, 170))
     draw = ImageDraw.Draw(bar)
-    font_size = max(16, bar_h // 4)
-    font = _load_font(font_size)
-    label = f"{speaker}: {text}"
-    wrapped = textwrap.fill(label, width=max(20, w // (font_size // 2)))
-    draw.multiline_text((20, bar_h // 2), wrapped, font=font, fill=(255, 255, 255, 255), anchor="lm", spacing=4)
+    y = (bar_h - len(lines) * line_h) // 2
+    for line in lines:
+        draw.text((margin, y), line, font=font, fill=(255, 255, 255, 255))
+        y += line_h
     overlay.paste(bar, (0, h - bar_h), bar)
     return overlay
 

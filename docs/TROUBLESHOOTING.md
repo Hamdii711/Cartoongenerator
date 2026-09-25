@@ -49,15 +49,13 @@ sur un contour anti-aliasé. Deux options :
 - Retoucher l'image générée à la main (elle reste un simple PNG dans
   `characters/<nom>/`) avant de lancer `render`.
 
-## Le personnage a de grandes zones blanches et devient (partiellement) transparent
+## Une partie blanche du personnage devient transparente
 
-Le détourage par couleur clé suppose que le fond est blanc et que le
-personnage ne l'est pas. Si ta description de personnage produit
-naturellement du blanc (ex: un fantôme, une blouse blanche), soit reformule
-la description pour éviter le blanc pur, soit utilise `openai` comme
-provider image (le paramètre `background: transparent` de `gpt-image-1` est
-une vraie transparence, pas un détourage a posteriori) - voir
-`providers/openai_provider.py`.
+Le détourage ne retire que le blanc relié au bord de l'image, donc un
+t-shirt blanc ou le blanc des yeux sont normalement conservés. Si une zone
+blanche disparaît quand même, c'est que son contour noir a une petite
+ouverture qui la relie au fond. Corrige l'image (referme le contour) ou
+régénère-la en demandant des « contours noirs épais et continus ».
 
 ## Erreur MoviePy / ffmpeg au moment de l'export
 
