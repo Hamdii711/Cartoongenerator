@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 from moviepy import VideoClip
 
 from config import get_project_dir, load_config
+from pipeline import rig as rig_module
 from pipeline.character_studio import load_character_assets
 from providers.base import ImageProvider
 from providers.prompts import build_background_prompt
@@ -70,13 +71,15 @@ def _line_duration(text: str, cfg: dict) -> float:
     return max(cfg["min_line_seconds"], len(text) / cfg["chars_per_second"])
 
 
-def _build_timeline(scene: Dict[str, Any], cfg: dict) -> Tuple[List[Tuple[float, float, str, str]], float]:
+def _build_timeline(
+    scene: Dict[str, Any], cfg: dict, start_offset: float = 0.0
+) -> Tuple[List[Tuple[float, float, str, str]], float]:
     """Return (timeline, total_duration).
 
     timeline entries are (start, end, speaker, text) windows during which
     that line is "showing" (spoken + captioned).
     """
-    t = cfg["scene_intro_pad"]
+    t = max(cfg["scene_intro_pad"], start_offset)
     timeline = []
     for line in scene.get("lines", []):
         dur = _line_duration(line["text"], cfg)
@@ -96,40 +99,44 @@ def _active_line(timeline, t: float):
 
 
 # ---------------------------------------------------------------------------
-# Background camera motion (Ken Burns style)
+# Camera
+#
+# The scene is composed in "world" space: the background is oversampled so
+# the camera has room to zoom/pan, and characters are placed ON that world
+# (feet on the floor). Each frame, the camera crops a window of the world
+# and scales it to the output size - so characters move exactly with the
+# background instead of floating over it.
 # ---------------------------------------------------------------------------
 
-def _make_background_frame_fn(bg_img: Image.Image, size: Size, camera: str, duration: float):
-    w, h = size
-    oversample = 1.25
-    big = bg_img.resize((int(w * oversample), int(h * oversample)), Image.LANCZOS)
-    bw, bh = big.size
+OVERSAMPLE = 1.25
+MAX_ZOOM = 1.15
+BASE_ZOOM = 1.05
 
-    def frame_at(t: float) -> np.ndarray:
-        p = min(1.0, t / duration) if duration > 0 else 0.0
-        if camera == "zoom_in":
-            scale = 1.0 + 0.15 * p
-        elif camera == "zoom_out":
-            scale = 1.15 - 0.15 * p
-        else:
-            scale = 1.05
-        crop_w = min(bw, max(1, int(w / scale)))
-        crop_h = min(bh, max(1, int(h / scale)))
-        if camera == "pan_left":
-            x = int((bw - crop_w) * (1 - p))
-        elif camera == "pan_right":
-            x = int((bw - crop_w) * p)
-        else:
-            x = (bw - crop_w) // 2
-        y = (bh - crop_h) // 2
-        crop = big.crop((x, y, x + crop_w, y + crop_h)).resize((w, h), Image.LANCZOS)
-        return np.array(crop)
 
-    return frame_at
+def _camera_box(camera: str, p: float, world_size: Size, out_size: Size) -> Tuple[float, float, float, float]:
+    """Crop window (x, y, width, height) in world pixels at progress p in [0, 1]."""
+    bw, bh = world_size
+    w, h = out_size
+    if camera == "zoom_in":
+        zoom = 1.0 + (MAX_ZOOM - 1.0) * p
+    elif camera == "zoom_out":
+        zoom = MAX_ZOOM - (MAX_ZOOM - 1.0) * p
+    else:
+        zoom = BASE_ZOOM
+    crop_w = min(bw, w / zoom)
+    crop_h = min(bh, h / zoom)
+    if camera == "pan_left":
+        x = (bw - crop_w) * (1 - p)
+    elif camera == "pan_right":
+        x = (bw - crop_w) * p
+    else:
+        x = (bw - crop_w) / 2
+    y = (bh - crop_h) / 2
+    return x, y, crop_w, crop_h
 
 
 # ---------------------------------------------------------------------------
-# Character pose / placement
+# Characters
 # ---------------------------------------------------------------------------
 
 def _character_pose(name: str, t: float, speaker: str | None, cfg: dict) -> str:
@@ -143,31 +150,27 @@ def _character_pose(name: str, t: float, speaker: str | None, cfg: dict) -> str:
     return "neutral"
 
 
-def _character_render_size(char_img: Image.Image, frame_size: Size) -> Size:
-    _, h = frame_size
-    target_h = int(h * 0.55)
-    scale = target_h / char_img.height
-    return max(1, int(char_img.width * scale)), target_h
+def _floor_y(world_size: Size, out_size: Size) -> float:
+    """World y of the characters' feet: near the bottom of the screen, and
+    still visible at the camera's tightest zoom."""
+    _, bh = world_size
+    _, h = out_size
+    return bh / 2 + (h / MAX_ZOOM) * 0.45
 
 
-def _character_position(
-    idx: int, count: int, frame_size: Size, char_size: Size, t: float
-) -> Tuple[int, int]:
-    w, h = frame_size
-    cw, ch = char_size
-    slot_w = w / count
-    base_x = int(slot_w * idx + (slot_w - cw) / 2)
-    base_y = h - ch - _caption_bar_height(frame_size)  # feet just above the caption bar
-
-    entrance = min(1.0, t / 0.5)
-    ease = 1 - (1 - entrance) ** 2
-    offscreen_x = -cw if idx < count / 2 else w
-    x = int(offscreen_x + (base_x - offscreen_x) * ease)
-    return x, base_y
+def _slot_centers(count: int, world_size: Size, out_size: Size) -> List[float]:
+    """World x of each character, spread over the part of the world that
+    stays on screen for every camera move (so nobody gets panned out)."""
+    bw, _ = world_size
+    w, _ = out_size
+    safe_w = w / MAX_ZOOM - (bw - w / BASE_ZOOM)  # visible in every pan position
+    safe_w = max(safe_w, w / MAX_ZOOM * 0.5)
+    left = (bw - safe_w) / 2
+    return [left + safe_w * (i + 0.5) / count for i in range(count)]
 
 
 # ---------------------------------------------------------------------------
-# Captions
+# Speech bubble
 # ---------------------------------------------------------------------------
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
@@ -181,10 +184,6 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
         except OSError:
             continue
     return ImageFont.load_default()
-
-
-def _caption_bar_height(size: Size) -> int:
-    return max(60, int(size[1] * 0.16))
 
 
 def _wrap_to_width(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
@@ -203,31 +202,49 @@ def _wrap_to_width(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> L
     return lines
 
 
-def _caption_overlay(speaker: str, text: str, size: Size) -> Image.Image:
-    w, h = size
-    bar_h = _caption_bar_height(size)
-    margin = 20
-    label = f"{speaker}: {text}"
 
-    # Shrink the font until the wrapped caption fits inside the bar.
-    font_size = max(16, bar_h // 4)
+def _draw_speech_bubble(frame: Image.Image, text: str, anchor_x: float, anchor_y: float) -> None:
+    """Comic speech bubble whose tail points at (anchor_x, anchor_y) - the
+    top of the speaker's head, in screen pixels."""
+    w, h = frame.size
+    font_size = max(16, h // 26)
+    pad = font_size // 2 + 4
+    max_text_w = int(min(w * 0.42, 560))
+
     while True:
         font = _load_font(font_size)
-        lines = _wrap_to_width(label, font, w - 2 * margin)
-        line_h = font_size + 6
-        if len(lines) * line_h <= bar_h - 10 or font_size <= 12:
+        lines = _wrap_to_width(text, font, max_text_w)
+        line_h = int(font_size * 1.25)
+        if len(lines) <= 4 or font_size <= 12:
             break
         font_size -= 2
 
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    bar = Image.new("RGBA", (w, bar_h), (0, 0, 0, 170))
-    draw = ImageDraw.Draw(bar)
-    y = (bar_h - len(lines) * line_h) // 2
+    text_w = max(font.getlength(line) for line in lines)
+    box_w = int(text_w + 2 * pad)
+    box_h = int(len(lines) * line_h + 2 * pad)
+    tail_h = max(14, h // 30)
+
+    left = int(min(max(anchor_x - box_w / 2, 10), w - box_w - 10))
+    top = int(max(anchor_y - tail_h - box_h - 6, 10))
+    bottom = top + box_h
+
+    draw = ImageDraw.Draw(frame)
+    outline = max(2, h // 240)
+    radius = min(box_h // 2, font_size)
+    draw.rounded_rectangle((left, top, left + box_w, bottom), radius=radius,
+                           fill=(255, 255, 255, 255), outline=(0, 0, 0, 255), width=outline)
+
+    tail_x = min(max(anchor_x, left + radius + 12), left + box_w - radius - 12)
+    tip = (anchor_x, max(anchor_y - 6, bottom + 4))
+    base_l = (tail_x - 12, bottom - outline)
+    base_r = (tail_x + 12, bottom - outline)
+    draw.polygon([base_l, tip, base_r], fill=(255, 255, 255, 255))
+    draw.line([base_l, tip, base_r], fill=(0, 0, 0, 255), width=outline)
+
+    y = top + pad
     for line in lines:
-        draw.text((margin, y), line, font=font, fill=(255, 255, 255, 255))
+        draw.text((left + pad, y), line, font=font, fill=(0, 0, 0, 255))
         y += line_h
-    overlay.paste(bar, (0, h - bar_h), bar)
-    return overlay
 
 
 # ---------------------------------------------------------------------------
@@ -238,36 +255,111 @@ def render_scene(
     project: str,
     scene: Dict[str, Any],
     cfg: dict | None = None,
+    walk_in: List[str] | None = None,
 ) -> Path:
+    """Render one scene to scenes/scene_<id>.mp4.
+
+    `walk_in` lists characters that walk into frame at the start of this
+    scene (typically their first appearance in the episode); everyone else
+    is already standing in place when the scene starts.
+    """
     cfg = cfg or load_config()
     size: Size = tuple(cfg["resolution"])
-
-    bg_img = _load_background(project, scene["id"])
-    timeline, duration = _build_timeline(scene, cfg)
-    bg_frame_fn = _make_background_frame_fn(bg_img, size, scene.get("camera", "static"), duration)
+    w, h = size
+    walk_in = walk_in or []
 
     scene_characters = list(dict.fromkeys(line["speaker"] for line in scene.get("lines", [])))
     if not scene_characters:
         scene_characters = list(scene.get("characters", []))
-    char_assets = {name: load_character_assets(project, name) for name in scene_characters}
-    char_render_sizes = {
-        name: _character_render_size(assets["neutral"], size) for name, assets in char_assets.items()
-    }
+
+    walk_time = cfg["walk_in_duration"] if any(n in walk_in for n in scene_characters) else 0.0
+    timeline, duration = _build_timeline(scene, cfg, start_offset=walk_time)
+
+    world_size: Size = (int(w * OVERSAMPLE), int(h * OVERSAMPLE))
+    world_bg = _load_background(project, scene["id"]).resize(world_size, Image.LANCZOS).convert("RGBA")
+    camera = scene.get("camera", "static")
+    floor_y = _floor_y(world_size, size)
+    slots = _slot_centers(len(scene_characters), world_size, size)
+
+    # Load each character once: either a rigged skeleton (real leg/arm
+    # rotation) or a flat pose sprite set (whole-image swap), whichever that
+    # character has. A rigged sprite() call composes a fresh frame; a flat
+    # one just looks up the pose image - both return a bottom-anchored RGBA
+    # image whose bottom edge is exactly the standing feet line.
+    char_h = int(h * cfg["character_height"])
+    animators: Dict[str, Any] = {}
+    for name in scene_characters:
+        if rig_module.is_rigged(project, name):
+            animators[name] = rig_module.load_rig(project, name, char_h)
+        else:
+            assets = load_character_assets(project, name)
+            scale = char_h / assets["neutral"].height
+            animators[name] = {
+                pose: img.resize((max(1, int(img.width * scale)), char_h), Image.LANCZOS)
+                for pose, img in assets.items()
+            }
+
+    def _rig_sprite(rig: "rig_module.LoadedRig", name: str, t: float, speaker: str | None, walking: bool) -> Image.Image:
+        head_variant = _character_pose(name, t, speaker, cfg)
+        phase = (sum(ord(c) for c in name) % 100) / 100.0 * 2 * math.pi
+        if walking:
+            amp = cfg["walk_swing_degrees"]
+            leg_l = rig_module.walk_leg_angle(t, cfg["step_duration"], amp, 0.0)
+            leg_r = rig_module.walk_leg_angle(t, cfg["step_duration"], amp, math.pi)
+            arm_l, arm_r = -leg_l, -leg_r
+        else:
+            sway = rig_module.idle_sway_angle(t, cfg["idle_sway_period"], cfg["idle_sway_degrees"], phase)
+            leg_l = leg_r = 0.0
+            arm_l, arm_r = sway, -sway
+        return rig.compose(head_variant, leg_l, leg_r, arm_l, arm_r)
+
+    def get_sprite(name: str, t: float, speaker: str | None, walking: bool) -> Image.Image:
+        animator = animators[name]
+        if isinstance(animator, rig_module.LoadedRig):
+            return _rig_sprite(animator, name, t, speaker, walking)
+        if walking:
+            walk_poses = [p for p in ("walk_1", "walk_2") if p in animator]
+            if walk_poses:
+                return animator[walk_poses[int(t / cfg["step_duration"]) % len(walk_poses)]]
+            return animator["neutral"]
+        return animator[_character_pose(name, t, speaker, cfg)]
+
+    def character_state(idx: int, name: str, t: float, speaker: str | None):
+        """(sprite, world_x_center, world_feet_y) of a character at time t."""
+        target_x = slots[idx]
+        walking = name in walk_in and t < walk_time
+        if walking:
+            progress = t / walk_time
+            sprite_w = char_h  # rough estimate is fine, only used to place the offscreen start
+            from_left = idx < len(scene_characters) / 2
+            start_x = -sprite_w if from_left else world_size[0] + sprite_w
+            x = start_x + (target_x - start_x) * progress
+            sprite = get_sprite(name, t, speaker, walking=True)
+            return sprite, x, floor_y
+        sprite = get_sprite(name, t, speaker, walking=False)
+        return sprite, target_x, floor_y
 
     def make_frame(t: float) -> np.ndarray:
-        frame = Image.fromarray(bg_frame_fn(t)).convert("RGBA")
         speaker, text = _active_line(timeline, t)
-
+        world = world_bg.copy()
+        head_positions = {}
         for idx, name in enumerate(scene_characters):
-            pose = _character_pose(name, t, speaker, cfg)
-            char_img = char_assets[name][pose]
-            render_size = char_render_sizes[name]
-            resized = char_img.resize(render_size, Image.LANCZOS)
-            x, y = _character_position(idx, len(scene_characters), size, render_size, t)
-            frame.alpha_composite(resized, (x, y))
+            sprite, cx, feet_y = character_state(idx, name, t, speaker)
+            x = int(cx - sprite.width / 2)
+            y = int(feet_y - sprite.height)
+            if -sprite.width < x < world_size[0]:
+                world.alpha_composite(sprite, (max(x, 0), y), source=(max(-x, 0), 0))
+            head_positions[name] = (cx, y)
 
-        if text:
-            frame.alpha_composite(_caption_overlay(speaker, text, size))
+        p = min(1.0, t / duration) if duration > 0 else 0.0
+        cx0, cy0, cw, ch = _camera_box(camera, p, world_size, size)
+        frame = world.resize(size, Image.BILINEAR, box=(cx0, cy0, cx0 + cw, cy0 + ch))
+
+        if text and speaker in head_positions:
+            hx, hy = head_positions[speaker]
+            sx = (hx - cx0) * w / cw
+            sy = (hy - cy0) * h / ch
+            _draw_speech_bubble(frame, text, sx, sy)
 
         return np.array(frame.convert("RGB"))
 
@@ -288,5 +380,14 @@ def render_scene(
 
 
 def render_project(project: str, story: Dict[str, Any], cfg: dict | None = None) -> List[Path]:
+    """Render every scene. A character walks in the first time they appear
+    in the episode, and is already in place in later scenes."""
     cfg = cfg or load_config()
-    return [render_scene(project, scene, cfg) for scene in story["scenes"]]
+    seen: set[str] = set()
+    paths = []
+    for scene in story["scenes"]:
+        present = list(dict.fromkeys(line["speaker"] for line in scene.get("lines", [])))
+        walk_in = [name for name in present if name not in seen]
+        seen.update(present)
+        paths.append(render_scene(project, scene, cfg, walk_in=walk_in))
+    return paths

@@ -82,3 +82,62 @@ def build_character_prompt(physical_description: str, personality: str, pose: st
 
 def build_background_prompt(background_desc: str) -> str:
     return f"A background illustration, no characters in it: {background_desc}. {CUTOUT_STYLE_SUFFIX}."
+
+
+# ---------------------------------------------------------------------------
+# Articulated rig parts
+#
+# Each body part is generated as its own isolated image so the renderer can
+# rotate it around a joint (see pipeline/rig.py) instead of swapping whole-
+# body pose images. The prompts fix a cropping convention per part (where the
+# joint sits at the very edge of the image) so the renderer can rely on a
+# consistent anchor point without needing to detect it.
+# ---------------------------------------------------------------------------
+
+RIG_PART_INSTRUCTIONS = {
+    "head": (
+        "Just the character's head and neck, facing forward, cropped tightly: "
+        "the bottom edge of the image is exactly the neck cut, where it plugs "
+        "into the body"
+    ),
+    "torso": (
+        "Just the character's torso: chest, belly and hips as one rounded "
+        "body shape, no head, no arms, no legs attached. Cropped tightly: the "
+        "top edge of the image is exactly the neck socket (where the head "
+        "plugs in), the bottom edge is exactly the hip line (where the legs "
+        "plug in)"
+    ),
+    "arm": (
+        "A single detached arm, from shoulder to hand, hanging straight down "
+        "vertically, no torso attached. Cropped tightly so the very top edge "
+        "of the image is exactly the shoulder joint (where it plugs into the "
+        "torso)"
+    ),
+    "leg": (
+        "A single detached leg, from hip to foot, straight and vertical, no "
+        "torso attached. Cropped tightly so the very top edge of the image is "
+        "exactly the hip joint (where it plugs into the torso)"
+    ),
+}
+
+RIG_HEAD_VARIANT_DESC = {
+    "neutral": "Mouth closed, eyes open, neutral expression.",
+    "talk": "Mouth open wide as if speaking mid-sentence, eyes open.",
+    "blink": "Eyes closed as if blinking, mouth closed.",
+}
+
+
+def build_rig_part_prompt(part: str, physical_description: str, personality: str, variant: str | None = None) -> str:
+    """`part` is one of "head", "torso", "arm", "leg". For "head", `variant`
+    is one of "neutral"/"talk"/"blink"."""
+    variant_desc = RIG_HEAD_VARIANT_DESC.get(variant, "") if part == "head" else ""
+    return (
+        f"A single isolated body part cut out flat from a paper-cutout puppet "
+        f"rig, like a toy action figure part - NOT a full character, just this "
+        f"one piece: {RIG_PART_INSTRUCTIONS[part]}. "
+        f"Character this part belongs to: {physical_description}. Personality: "
+        f"{personality}. Use the exact same colors, proportions, skin tone and "
+        f"outfit as the rest of this same character's body. {variant_desc} "
+        f"Plain solid white background, no shadow, symmetrical, facing "
+        f"straight forward, no other body parts visible. {CUTOUT_STYLE_SUFFIX}."
+    )

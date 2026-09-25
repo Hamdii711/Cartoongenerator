@@ -14,8 +14,10 @@ humain) :
 
 ## `character add`
 
-Génère les 3 assets d'un personnage (`neutral.png`, `talk.png`,
-`blink.png`) et sauvegarde sa fiche (`profile.json`).
+Génère un **personnage articulé** (torse, tête x3, 2 bras, 2 jambes,
+détaillé dans [docs/RIG.md](RIG.md)) et sauvegarde sa fiche
+(`profile.json`). Avec `--flat`, génère à la place les 3 anciennes poses
+figées (`neutral.png`, `talk.png`, `blink.png`), sans articulation.
 
 ```bash
 python main.py character add \
@@ -35,8 +37,14 @@ python main.py character add \
 | `--personality` | non | Traits de caractère (influence aussi le script généré ensuite) |
 | `--role` | non | Rôle dans l'histoire |
 | `--provider` | non | Provider image (`openai`, `gemini`, ...) - défaut : `default_image_provider` de `config.yaml` |
+| `--flat` | non | Génère 3 poses figées au lieu d'un rig articulé (pas de mouvement de jambes/bras) |
 
-Sortie :
+Sortie (rig, par défaut) :
+```json
+{"status": "ok", "name": "Randy", "dir": "projects/ep1/characters/Randy", "paths": {"torso": "...", "head_neutral": "...", "head_talk": "...", "head_blink": "...", "arm_left": "...", "arm_right": "...", "leg_left": "...", "leg_right": "..."}, "profile": {...}, "rigged": true}
+```
+
+Sortie (`--flat`) :
 ```json
 {"status": "ok", "name": "Randy", "dir": "projects/ep1/characters/Randy", "paths": {"neutral": "...", "talk": "...", "blink": "..."}, "profile": {...}}
 ```

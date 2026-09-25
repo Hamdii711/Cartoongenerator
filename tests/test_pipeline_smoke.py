@@ -10,6 +10,8 @@ Run with: python -m pytest tests/test_pipeline_smoke.py -q
 from __future__ import annotations
 
 import io
+
+import numpy as np
 import sys
 from pathlib import Path
 
@@ -169,3 +171,71 @@ def test_caption_wraps_long_text_inside_frame():
     lines = scene_renderer._wrap_to_width("mot " * 60, font, 600)
     assert len(lines) > 1
     assert all(font.getlength(line) <= 600 for line in lines)
+
+
+def test_generate_rig_creates_all_parts_and_rig_json(project):
+    from pipeline import rig
+
+    result = rig.generate_rig(project, "Yanis", "a test character", "confident", "lead", FakeImageProvider())
+    assert set(result["paths"]) == set(rig.PART_SPECS)
+    assert rig.is_rigged(project, "Yanis")
+    for part in rig.PART_SPECS:
+        assert Path(result["paths"][part]).exists()
+
+
+def test_rig_compose_moves_limbs_independently_of_torso(project):
+    """Rotating a leg must change pixels near the foot without moving the
+    torso - i.e. real per-limb articulation, not a whole-image swap."""
+    from pipeline import rig
+
+    rig.generate_rig(project, "Yanis", "a test character", "confident", "lead", FakeImageProvider())
+    loaded = rig.load_rig(project, "Yanis", 300)
+
+    straight = np.array(loaded.compose("neutral", 0, 0, 0, 0))
+    swung = np.array(loaded.compose("neutral", 30, -30, 20, -20))
+
+    assert straight.shape == swung.shape
+    assert not np.array_equal(straight, swung)
+
+    # A small patch strictly inside the torso's own columns and rows (clear
+    # of the shoulder/hip joints and of the neighboring arms, which in this
+    # synthetic test are plain squares as tall as the torso) must be
+    # identical - only the limbs moved, not the torso itself.
+    cw, ch = loaded.canvas_size()
+    torso = loaded.parts["torso"]
+    torso_top = ch - loaded.char_height + loaded.parts["head_neutral"].height
+    torso_left = (cw - torso.width) // 2
+    rows = slice(torso_top + torso.height // 2 - 5, torso_top + torso.height // 2 + 5)
+    cols = slice(torso_left + torso.width // 2 - 5, torso_left + torso.width // 2 + 5)
+    assert np.array_equal(straight[rows, cols], swung[rows, cols])
+
+
+def test_rig_frame_bottom_edge_is_the_floor(project):
+    """The composed canvas's bottom row is the standing feet line, so the
+    scene renderer can position it exactly like a flat pose sprite."""
+    from pipeline import rig
+
+    rig.generate_rig(project, "Yanis", "a test character", "confident", "lead", FakeImageProvider())
+    loaded = rig.load_rig(project, "Yanis", 300)
+    frame = loaded.compose("neutral")
+    assert frame.height == loaded.char_height + (frame.height - loaded.char_height)
+    last_row_alpha = np.array(frame)[-1, :, 3]
+    assert last_row_alpha.max() > 0  # something touches the very bottom row when standing straight
+
+
+def test_render_project_with_a_rigged_character(project):
+    from pipeline import rig
+
+    rig.generate_rig(project, "Yanis", "a test character", "confident", "lead", FakeImageProvider())
+
+    story = script_writer.generate_story(project, "a test theme", 2, FakeLLMProvider(), character_names=["Yanis"])
+    scene_renderer.ensure_backgrounds(project, story, FakeImageProvider())
+
+    cfg = cg.load_config()
+    cfg["resolution"] = [320, 180]
+    cfg["fps"] = 10
+
+    paths = scene_renderer.render_project(project, story, cfg)
+    assert len(paths) == 2
+    for p in paths:
+        assert p.exists() and p.stat().st_size > 0

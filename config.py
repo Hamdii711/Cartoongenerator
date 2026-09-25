@@ -34,6 +34,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "blink_interval": 4.0,
     "blink_duration": 0.15,
     "scene_transition_fade": 0.3,
+    "character_height": 0.55,
+    "walk_in_duration": 1.4,
+    "step_duration": 0.25,
+    "walk_swing_degrees": 22.0,
+    "idle_sway_degrees": 4.0,
+    "idle_sway_period": 2.2,
 }
 
 

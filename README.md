@@ -20,6 +20,7 @@ autre dépôt.
 | Doc | Contenu |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Comment le pipeline est découpé et pourquoi, détail du rendu d'une scène, roadmap |
+| [docs/RIG.md](docs/RIG.md) | Personnage articulé (squelette animé par rotation) : comment ça marche, limites |
 | [docs/IMAGES_MANUELLES.md](docs/IMAGES_MANUELLES.md) | Prompts pour créer toi-même personnages et décors dans ChatGPT/Gemini |
 | [docs/CLI.md](docs/CLI.md) | Référence complète de chaque commande, flags, sortie JSON |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env`, `config.yaml`, schémas `story.json` et `profile.json` |

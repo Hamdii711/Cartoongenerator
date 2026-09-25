@@ -25,6 +25,10 @@ from providers.base import ImageProvider
 from providers.prompts import build_character_prompt
 
 POSES = ("neutral", "talk", "blink")
+# Optional walking frames (e.g. left foot forward / right foot forward),
+# alternated while a character walks into the scene. Without them the
+# character hops in its neutral pose, cutout style.
+WALK_POSES = ("walk_1", "walk_2")
 
 
 def _key_white_to_alpha(img: Image.Image, threshold: int = 235, soft_range: int = 30) -> Image.Image:
@@ -126,9 +130,10 @@ def import_character(
     """
     if "neutral" not in pose_images:
         raise ValueError("A 'neutral' image is required to import a character")
-    unknown = set(pose_images) - set(POSES)
+    allowed = POSES + WALK_POSES
+    unknown = set(pose_images) - set(allowed)
     if unknown:
-        raise ValueError(f"Unknown pose(s) {sorted(unknown)}; expected some of {list(POSES)}")
+        raise ValueError(f"Unknown pose(s) {sorted(unknown)}; expected some of {list(allowed)}")
 
     c_dir = get_project_dir(project, create=True) / "characters" / name
     c_dir.mkdir(parents=True, exist_ok=True)
@@ -175,7 +180,7 @@ def load_character_assets(project: str, name: str) -> Dict[str, Image.Image]:
     """
     c_dir = character_dir(project, name)
     assets = {}
-    for pose in POSES:
+    for pose in POSES + WALK_POSES:
         path = c_dir / f"{pose}.png"
         if path.exists():
             assets[pose] = Image.open(path).convert("RGBA")
@@ -202,7 +207,8 @@ def load_character_assets(project: str, name: str) -> Dict[str, Image.Image]:
         )
         assets = {pose: img.crop(union) for pose, img in assets.items()}
 
-    # Fall back to neutral for any pose that wasn't generated.
+    # Fall back to neutral for any core pose that wasn't generated. Walk
+    # poses stay absent when not provided: the renderer checks for them.
     for pose in POSES:
         assets.setdefault(pose, assets["neutral"])
     return assets
