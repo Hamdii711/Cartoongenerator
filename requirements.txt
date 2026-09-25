@@ -1,0 +1,8 @@
+openai>=1.40.0,<2
+google-genai>=0.3.0,<1
+Pillow>=10.0.0,<12
+numpy>=1.24.0,<3
+moviepy>=2.0.0,<3
+imageio-ffmpeg>=0.4.9,<1
+python-dotenv>=1.0.0,<2
+PyYAML>=6.0,<7
